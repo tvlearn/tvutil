@@ -1,5 +1,7 @@
 # tvutil
 
+[![code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/ambv/black)
+
 Utilities for pre-/postprocessing and visualization developed and/or commonly used by the `tvlearn` community.
 
 
