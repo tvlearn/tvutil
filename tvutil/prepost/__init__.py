@@ -10,6 +10,7 @@ from .overlapping_patches import (
     MultiDimOverlappingPatches,
 )
 from .whitening import apply_zca_whitening
+from .random_patches import extract_random_patches
 
 __all__ = [
     "mean_merger",
@@ -22,4 +23,5 @@ __all__ = [
     "OverlappingPatches",
     "MultiDimOverlappingPatches",
     "apply_zca_whitening",
+    "extract_random_patches",
 ]
