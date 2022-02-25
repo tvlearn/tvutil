@@ -9,6 +9,7 @@ from .overlapping_patches import (
     OverlappingPatches,
     MultiDimOverlappingPatches,
 )
+from .whitening import apply_zca_whitening
 
 __all__ = [
     "mean_merger",
@@ -20,4 +21,5 @@ __all__ = [
     "gaussian2d",
     "OverlappingPatches",
     "MultiDimOverlappingPatches",
+    "apply_zca_whitening",
 ]

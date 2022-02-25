@@ -6,7 +6,7 @@ import numpy as np
 from scipy.linalg import eigh
 
 
-def whiten(X: np.ndarray, var=0.95, bias=0.1, precision=np.float64) -> np.ndarray:
+def apply_zca_whitening(X: np.ndarray, var=0.95, bias=0.1, precision=np.float64) -> np.ndarray:
     """Zero-Phase Component Whitening (compare [1,2])
 
     :param X: Data, is (n_samples, n_features)
@@ -39,5 +39,4 @@ def whiten(X: np.ndarray, var=0.95, bias=0.1, precision=np.float64) -> np.ndarra
     eigv = eigv[:, :nc]
     components = np.dot(eigv * np.sqrt(1.0 / eigs), eigv.T)
 
-    X_transformed = np.dot(X, components)
-    return X_transformed
+    return np.dot(X, components)
