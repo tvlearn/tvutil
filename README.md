@@ -22,7 +22,7 @@ $ pip install -r requirements.txt
 Finally, to install `tvutil` run:
 
 ```bash
-$ python setup.py install develop
+$ python setup.py install
 ```
 
 
