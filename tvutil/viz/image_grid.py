@@ -186,11 +186,9 @@ def make_grid_with_black_boxes_and_white_background(
     return grid, cmap, vmin, vmax, scale_suff
 
 
-def save_grid(images, png_file, **kwargs):
+def save_grid(png_file, **kwargs):
     # type: (np.ndarray, str, Dict) -> None
     """Save image grid as PNG
-    :param images: images to be merged into grid, shape must be (no_images, no_channels, height,
-                           width)
     :param png_file: Write image to this PNG file
     :param kwargs: For further arguments, see docs of
                    `make_grid_with_black_boxes_and_white_background`
@@ -201,9 +199,9 @@ def save_grid(images, png_file, **kwargs):
     For LICENSING and COPYRIGHT for this function see pytorch/vision's license at:
     https://github.com/pytorch/vision/blob/main/LICENSE
     """
-
+    assert "images" in kwargs
     grid, cmap, vmin, vmax, scale_suff = make_grid_with_black_boxes_and_white_background(
-        images, **kwargs  # type: ignore
+        **kwargs  # type: ignore
     )
 
     png_file = png_file.replace(".png", "{}.png".format(scale_suff))
