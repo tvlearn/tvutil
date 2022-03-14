@@ -2,6 +2,7 @@
 
 from __future__ import division
 
+from copy import deepcopy
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -135,6 +136,7 @@ def make_grid_with_black_boxes_and_white_background(
     Licensed under the Academic Free License version 3.0
     """
     assert "images" in kwargs
+    kwargs = deepcopy(kwargs)
     images = kwargs["images"]
     assert isinstance(images, np.ndarray)  # to make mypy happy
     if global_clim:
