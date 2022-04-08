@@ -3,7 +3,7 @@
 # Licensed under the Academic Free License version 3.0
 
 import numpy as np
-from typing import Union, List, Iterable  # noqa
+from typing import Union, Iterable  # noqa
 
 
 def extract_random_patches(
@@ -12,7 +12,7 @@ def extract_random_patches(
     no_patches,
     flatten=True,
 ):
-    # type: (np.ndarray, Union[int, List[int, int]], int, bool) -> np.ndarray
+    # type: (np.ndarray, Union[int, Iterable[int]], int, bool) -> np.ndarray
     """Extract patches from batch of images at randomly sampled positions
 
     :param images: Image batch, is (no_images, height, width, no_channels)
