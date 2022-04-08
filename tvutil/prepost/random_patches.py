@@ -3,15 +3,16 @@
 # Licensed under the Academic Free License version 3.0
 
 import numpy as np
-from typing import Union, Tuple
+from typing import Union, List, Iterable  # noqa
 
 
 def extract_random_patches(
-    images: np.ndarray,
-    patch_size: Union[int, Tuple[int, int]],
-    no_patches: int,
-    flatten: bool = True,
-) -> np.ndarray:
+    images,
+    patch_size,
+    no_patches,
+    flatten=True,
+):
+    # type: (np.ndarray, Union[int, List[int, int]], int, bool) -> np.ndarray
     """Extract patches from batch of images at randomly sampled positions
 
     :param images: Image batch, is (no_images, height, width, no_channels)
@@ -28,7 +29,7 @@ def extract_random_patches(
     ), "Input must have dimensions (no_images, height, width, no_channels)"
     no_images, height, width, no_channels = images.shape
     patch_height, patch_width = (
-        patch_size if isinstance(patch_size, tuple) else (patch_size, patch_size)
+        patch_size if isinstance(patch_size, Iterable) else (patch_size, patch_size)
     )
     data = np.zeros((no_patches, patch_height, patch_width, no_channels), dtype="float64")
     indi = np.random.randint(0, no_images, no_patches)
