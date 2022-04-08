@@ -6,7 +6,8 @@ import numpy as np
 from scipy.linalg import eigh
 
 
-def apply_zca_whitening(X: np.ndarray, var=0.95, bias=0.1, precision=np.float64) -> np.ndarray:
+def apply_zca_whitening(X, var=0.95, bias=0.1, precision=np.float64):
+    # type: (np.ndarray, float, float, np.dtype) -> np.ndarray
     """Zero-Phase Component Whitening (compare [1,2])
 
     :param X: Data, is (n_samples, n_features)
