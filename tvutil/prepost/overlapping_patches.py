@@ -500,6 +500,7 @@ class MultiDimOverlappingPatches:
             )
             for ch in range(self.no_channels)
         ]
+        breakpoint()
 
     def get_image_shape(self):
         # type: () -> Tuple[int, int, int]
@@ -535,7 +536,7 @@ class MultiDimOverlappingPatches:
         :param discard_empty: see `OverlappingPatches.get` docs
         :param concatenate: see `OverlappingPatches.get` docs
         :return: Image patches tensor. Shape is (no_channels * no_pixels_per_patch, no_patches)
-                 if concatenate if True else (no_pixels_per_patch, no_patches, no_channels)
+                 if concatenate is True else (no_pixels_per_patch, no_patches, no_channels)
         """
         p = [self.OVPs[ch].get(discard_empty) for ch in range(self.no_channels)]
         return (
@@ -644,3 +645,370 @@ class MultiDimOverlappingPatches:
                 for ch in range(self.no_channels)
             ]
         return to.stack(merged, dim=-1) if self._torch else np.stack(merged, axis=-1)
+
+class Overlapping3DPatches:
+    def __init__(
+        self,
+        image,
+        patch_height,
+        patch_width,
+        patch_length,
+        patch_shift,
+        verbose=False,
+    ):
+        # type: (Union[Tensor, ndarray], int, int, int, bool) -> None
+        """Back and forth transformation for image segmentation into overlapping patches (3D).
+        Makes use of `skimage.util.view_as_windows`.
+
+        :param image: Tensor to be cut into patches and reconstructed. Must be 3-dimensional,
+                      (height, width, length).
+        :param patch_height: Will be passed as `window_shape[0]` to `skimage.util.view_as_windows`.
+        :param patch_width: Will be passed as `window_shape[1]` to `skimage.util.view_as_windows`.
+        :param patch_length: Will be passed as `window_shape[2]` to `skimage.util.view_as_windows`.
+        :param patch_shift: Will be passed as `step` to `skimage.util.view_as_windows`.
+        :param verbose: Whether to print details when merging patches
+        """
+        assert np.ndim(image) == 3, "image tensor must be two-dimensional (width x height)"
+
+        self._torch = False if isinstance(image, ndarray) else True
+        self._verbose = verbose
+        self._patch_height = patch_height
+        self._patch_width = patch_width
+        self._patch_length = patch_length
+        self._patch_shift = patch_shift
+        device, precision = None if isinstance(image, ndarray) else image.device, image.dtype
+        image_np = image if isinstance(image, ndarray) else image.detach().cpu().numpy()
+
+        # infer some parameters
+        image_not_incomplete = np.logical_not(np.isnan(image_np).any())
+        image_height, image_width, image_length = image_np.shape[0], image_np.shape[1], image_np.shape[2]
+        no_pixels_in_patch = patch_height * patch_width * patch_length
+        no_patches_vert = int(
+            np.ceil(float(image_height - patch_height) / patch_shift) + 1
+        )  # no patches in vertical direction
+        no_patches_horz = int(
+            np.ceil(float(image_width - patch_width) / patch_shift) + 1
+        )  # no patches in horizontal direction
+        no_patches_lat = int(
+            np.ceil(float(image_length - patch_length) / patch_shift) + 1
+        )  # no patches in lateral direction
+        no_patches = no_patches_vert * no_patches_horz * no_patches_lat
+        no_patches_vert_shift_1 = int(
+            np.ceil(float(image_height - patch_height)) + 1
+        )  # no patches in vertical dir for step=1
+        no_patches_horz_shift_1 = int(
+            np.ceil(float(image_width - patch_width)) + 1
+        )  # no patches in horizontal dir for step=1
+        no_patches_lat_shift_1 = int(
+            np.ceil(float(image_length - patch_length)) + 1
+        )  # no patches in lateral dir for step=1
+        no_patches_shift_1 = (
+            no_patches_vert_shift_1 * no_patches_horz_shift_1 * no_patches_lat_shift_1
+        )  # no patches for step=1
+
+        ninds_ = np.arange(no_patches_shift_1).reshape(
+            no_patches_vert_shift_1, no_patches_horz_shift_1, no_patches_lat_shift_1
+        )  # lower right patch locations in image for step = 1
+        hinds = (
+            np.unique(
+                np.append(
+                    np.arange(1, no_patches_vert_shift_1, patch_shift),
+                    [no_patches_vert_shift_1],
+                )
+            )
+            - 1
+        ).flatten()  # indices of relevant patches for step=patch_shift in vertical direction
+        winds = (
+            np.unique(
+                np.append(
+                    np.arange(1, no_patches_horz_shift_1, patch_shift),
+                    [no_patches_horz_shift_1],
+                )
+            )
+            - 1
+        ).flatten()  # indices of relevant patches for step=patch_shift in horizontal direction
+        linds = (
+            np.unique(
+                np.append(
+                    np.arange(1, no_patches_lat_shift_1, patch_shift),
+                    [no_patches_lat_shift_1],
+                )
+            )
+            - 1
+        ).flatten()  # indices of relevant patches for step=patch_shift in lateral direction
+        ninds = (ninds_[hinds, :, :][:, winds, :][:, :, linds]).flatten()  # indices of relevant patches
+        assert len(ninds) == no_patches
+        dinds = np.arange(no_pixels_in_patch).reshape(
+            patch_height, patch_width, patch_length
+        )  # spatial order of pixel indices, is (patch_height, patch_width),
+        # indexed l->r and then top->bottom
+        to_be_synthesized = (
+            np.isnan(image_np) if np.isnan(image_np).any() else np.ones_like(image_np, dtype=bool)
+        )  # indicates which pixels of the input image are to be reconstructed
+        ind_rows_to_synthesize, ind_cols_to_synthesize, ind_deps_to_synthesize = np.where(
+            to_be_synthesized
+        )  # index tuples of missing values, is (total # missing vals)
+        no_pixels_to_synthesize = ind_rows_to_synthesize.size  # no missing values
+
+        # cut patches
+        print("Extracting patches...", end="")
+        patches_np = view_as_windows(
+            image_np, window_shape=[patch_height, patch_width, patch_length], step=1
+        )  # moves sliding window left->right and then top->bottom
+        # is (image_height-patch_height+1, image_width-patch_width+1, patch_height, patch_width)
+        patches_np = (
+            patches_np.reshape(patch_height, patch_width, patch_length, no_patches_shift_1)
+            .reshape(no_patches_shift_1, no_pixels_in_patch)
+            .T
+        )  # is (no_pixels_in_patch,no_patches_shift_1)
+        patches_np = patches_np[
+            :, ninds
+        ]  # remove patches not satisfying `patch_shift` is (no_pixels_in_patch,no_patches)
+        patches_np_not_isnan = np.logical_not(np.isnan(patches_np))
+        patches = (
+            to.from_numpy(patches_np).to(dtype=precision, device=device)
+            if self._torch
+            else patches_np
+        )
+        print("Done")
+
+        # compute indices required to merge patches back to image
+        print("Initialize back-transformation...", end="")
+        all_inds_relevant_patches = [0] * no_pixels_to_synthesize
+        all_inds_relevant_values_in_patch = [0] * no_pixels_to_synthesize
+        restorable = (
+            np.zeros(no_pixels_to_synthesize, dtype=bool) if np.isnan(patches_np).any() else None
+        )
+        for p in range(no_pixels_to_synthesize):
+
+            # location of missing value in original image
+            r, c, d = ind_rows_to_synthesize[p], ind_cols_to_synthesize[p], ind_deps_to_synthesize[p]
+
+            # location of relevant patches for patch_shift = 1(rows and columns of ninds_)
+            r_ = (
+                np.arange(
+                    max(r - patch_height + 2, 1),
+                    min(r + 1, no_patches_vert_shift_1) + 1,
+                )
+                - 1
+            )
+            c_ = np.arange(max(c - patch_width + 2, 1), min(c + 1, no_patches_horz_shift_1) + 1) - 1
+            d_ = np.arange(max(d - patch_length + 2, 1), min(d + 1, no_patches_lat_shift_1) + 1) - 1
+
+            ns_ = ninds_[r_, :, :][:, c_, :][
+                :, :, d_
+            ].flatten()  # is no relevant patches for given pixel in original
+            ds_ = np.sort(dinds[r - r_, :, :][:, c - c_, :][:, :, d - d_].flatten())[::-1]
+
+            # only use patches compatible with given patch_shift
+            if patch_shift > 1:
+                nsinds = np.isin(ns_, ninds)
+                inds_relevant_patches, inds_relevant_values_in_patch = (
+                    ns_[nsinds],
+                    ds_[nsinds],
+                )
+            else:
+                inds_relevant_patches, inds_relevant_values_in_patch = ns_, ds_
+
+            # indices considering remaining patches
+            if patch_shift > 1:
+                inds_relevant_patches = np.where(np.isin(ninds, inds_relevant_patches))[0]
+
+            if image_not_incomplete:
+                all_inds_relevant_patches[p] = inds_relevant_patches
+                all_inds_relevant_values_in_patch[p] = inds_relevant_values_in_patch
+            else:
+                relevant_patches = patches_np_not_isnan[:, inds_relevant_patches]
+                ind_nonempty_patches = relevant_patches.any(axis=0)
+                if ind_nonempty_patches.any():
+                    assert restorable is not None  # to make mypy happy
+                    restorable[p] = True
+                    # ind_nonempty_patches = relevant_patches.any(axis=0)
+                    all_inds_relevant_patches[p] = inds_relevant_patches[ind_nonempty_patches]
+                    all_inds_relevant_values_in_patch[p] = inds_relevant_values_in_patch[
+                        ind_nonempty_patches
+                    ]
+        print("Done")
+
+        self._image, self._patches = image, patches
+        self._ind_rows_to_synthesize = (
+            to.from_numpy(ind_rows_to_synthesize).to(dtype=to.int64, device=device)
+            if self._torch
+            else ind_rows_to_synthesize
+        )
+        self._ind_cols_to_synthesize = (
+            to.from_numpy(ind_cols_to_synthesize).to(dtype=to.int64, device=device)
+            if self._torch
+            else ind_cols_to_synthesize
+        )
+        self._ind_deps_to_synthesize = (
+            to.from_numpy(ind_deps_to_synthesize).to(dtype=to.int64, device=device)
+            if self._torch
+            else ind_deps_to_synthesize
+        )
+        self._no_pixels_to_synthesize = no_pixels_to_synthesize
+        self._restorable = (
+            (
+                to.from_numpy(restorable).to(dtype=to.bool, device=device)
+                if self._torch
+                else restorable
+            )
+            if restorable is not None
+            else None
+        )
+
+        all_inds_relevant_patches = [
+            x.copy() if isinstance(x, np.ndarray) else np.ndarray(x)  # type: ignore
+            for x in all_inds_relevant_patches
+        ]
+        self._all_inds_relevant_patches = [
+            to.from_numpy(x).to(dtype=to.int64, device=device) if self._torch else x
+            for x in all_inds_relevant_patches
+        ]
+
+        all_inds_relevant_values_in_patch = [
+            x.copy() if isinstance(x, np.ndarray) else np.ndarray(x)  # type: ignore
+            for x in all_inds_relevant_values_in_patch
+        ]
+        self._all_inds_relevant_values_in_patch = [
+            to.from_numpy(x).to(dtype=to.int64, device=device) if self._torch else x
+            for x in all_inds_relevant_values_in_patch
+        ]
+
+    def get_image_shape(self):
+        # type: () -> Tuple[int, int]
+        """Return shape of input image
+
+        :return: Image shape, (height, width, length)
+        """
+        return tuple(self._image.shape)  # type: ignore
+
+    def get_number_of_patches(self, discard_empty=True):
+        # type: (bool) -> int
+        """Return number of patches cut from image
+
+        :param discard_empty: Whether to discard patches that do not contain finite entries
+        :return: Number of patches
+        """
+        to_or_np = to if self._torch else np
+        not_isnan = to_or_np.logical_not(to_or_np.isnan(self._patches))  # type: ignore
+        no_patches_with_discarding = to_or_np.sum(
+            not_isnan.any(**{"dim" if self._torch else "axis": 0})
+        ).item()
+        no_patches_without_discarding = int(self._patches.shape[1])
+        return no_patches_with_discarding if discard_empty else no_patches_without_discarding
+
+    def get_patch_height_width_shift(self):
+        # type: () -> Tuple[int, int, int]
+        """Return the patch height, width and shift
+
+        :return: Tuple with (patch height, width, length and shift)
+        """
+        return self._patch_height, self._patch_width, self._patch_shift, self._patch_length
+
+    def get(self, discard_empty=True):
+        # type: (bool) -> Union[Tensor, ndarray]
+        """Returns patches cut from image.
+
+        :param discard_empty: Whether to discard patches that do not contain finite entries
+        :return: Image patches tensor, is (no_pixels_per_patch, no_patches)
+        """
+        to_or_np = to if self._torch else np
+        if to_or_np.logical_not(to_or_np.isnan(self._patches).any()):
+            return self._patches
+        else:
+            if discard_empty:
+                not_isnan = to_or_np.logical_not(to_or_np.isnan(self._patches))  # type: ignore
+                inds_not_empty = not_isnan.any(**{"dim" if self._torch else "axis": 0})
+                return self._patches[:, inds_not_empty]
+            else:
+                return self._patches
+
+    def set(self, new_patches, discarded_empty=True):
+        # type: (Union[Tensor, ndarray], bool) -> None
+        """Update image patches tensor to new values
+
+        :param new_patches: Image patches tensor filled with new values. `self._patches` will
+                            be updated to this tensor, must be (no_pixels_per_patch, no_patches).
+        :param discarded_empty: Whether patches without finite entries have been discarded when
+                                `get` was called (compare docs of `get`).
+        """
+        to_or_np = to if self._torch else np
+        if to_or_np.logical_not(to_or_np.isnan(self._patches).any()):
+            assert (
+                new_patches.shape == self._patches.shape
+            ), "shape of new and internal patches does not match"
+            self._patches[:, :] = new_patches
+        else:
+            if discarded_empty:
+                not_isnan = to_or_np.logical_not(to_or_np.isnan(self._patches))  # type: ignore
+                inds_not_empty = not_isnan.any(**{"dim" if self._torch else "axis": 0})
+                assert (
+                    new_patches.shape == self._patches[:, inds_not_empty].shape
+                ), "shape of new and non-empty internal patches does not match"
+                self._patches[:, inds_not_empty] = new_patches
+            else:
+                assert (
+                    new_patches.shape == self._patches.shape
+                ), "shape of new and internal patches does not match"
+                self._patches[:, :] = new_patches
+
+    def merge(self, merge_method=mean_merger):
+        # type: (Callable) -> Union[Tensor, ndarray]
+        """Merge patches to obtain new image.
+
+        :param merge_method: Function defining how pixel estimates from different patches are to be
+                             merged, defaults to unweighted averaging.
+        :return: Image obtained through patch averaging, is (height, width)
+        """
+        new_image = self._image.copy() if isinstance(self._image, ndarray) else self._image.clone()
+        for p in range(self._no_pixels_to_synthesize):
+            if self._restorable is not None and not self._restorable[p]:
+                continue
+
+            r, c, d = self._ind_rows_to_synthesize[p], self._ind_cols_to_synthesize[p], self._ind_deps_to_synthesize[p]
+            inds_relevant_patches = self._all_inds_relevant_patches[p]
+            inds_relevant_values_in_patch = self._all_inds_relevant_values_in_patch[p]
+
+            restored = self._patches[inds_relevant_values_in_patch, inds_relevant_patches]
+
+            if self._verbose:
+                print("Processing image pixel at ({},{},{})".format(r, c, d))
+                print("=" * 12)
+                print("Estimates from all patches \n  {}\n".format(restored))
+
+            kwargs = (
+                {
+                    "height": self._patch_height,
+                    "width": self._patch_width,
+                    "length": self._patch_length,
+                    "inds_relevant": inds_relevant_values_in_patch,
+                }
+                if merge_method == weighted_mean_merger
+                else {}
+            )
+            estimate = merge_method(restored, **kwargs)
+
+            if self._verbose:
+                print("Merged estimate is \n  {}\n".format(estimate))
+
+            new_image[r, c, d] = estimate
+
+        return new_image
+
+    def set_and_merge(
+        self,
+        new_patches,
+        discarded_empty=True,
+        merge_method=mean_merger,
+    ):
+        # type: (Union[Tensor, ndarray], bool, Callable) -> Union[Tensor, ndarray]
+        """Sequentially calls `set` and `merge`.
+
+        :param new_patches: see docs of `set`
+        :param discarded_empty: see docs of `set`
+        :param merge_method: see docs of `merge`
+        :return: see docs of `merge`
+        """
+        self.set(new_patches, discarded_empty)
+        return self.merge(merge_method)
