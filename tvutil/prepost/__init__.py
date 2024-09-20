@@ -7,6 +7,7 @@ from .overlapping_patches import (
     weighted_mean_merger,
     gaussian2d,
     OverlappingPatches,
+    OverlappingNDPatches,
     MultiDimOverlappingPatches,
 )
 from .whitening import apply_zca_whitening
