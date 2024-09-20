@@ -485,7 +485,7 @@ class OverlappingNDPatches:
         :param patch_shift: Will be passed as `step` to `skimage.util.view_as_windows`.
         :param verbose: Whether to print details when merging patches
         """
-        assert np.ndim(image) == 2, "image tensor must be two-dimensional (width x height)"
+        assert len(patch_shapes) == len(image.shape), "patch shapes must match image shape"
 
         self._torch = False if isinstance(image, ndarray) else True
         self._verbose = verbose
