@@ -16,6 +16,8 @@ try:
 except ImportError:
     pass
 
+import itertools
+
 
 def mean_merger(values):
     # type: (Union[Tensor, ndarray]) -> Union[Tensor, ndarray]
@@ -514,28 +516,27 @@ class OverlappingNDPatches:
 
         ninds_ = np.arange(no_patches_shift_1).reshape(*no_patches_per_axis_shift_1)
 
+        _ninds_ = np.array(
+            list(itertools.product(*(range(n) for n in (no_patches_per_axis_shift_1 + [1]))))
+        ).reshape(*no_patches_per_axis_shift_1, len(no_patches_per_axis_shift_1) + 1)
+
+        _ninds_[..., -1] = np.arange(no_patches_shift_1).reshape(*no_patches_per_axis_shift_1)
+
         inds = [
             (
-                np.unique(
-                    np.append(
-                        np.arange(1, no_patch, patch_shift),
-                        [no_patch],
-                    )
+                np.append(
+                    np.arange(1, no_patch, patch_shift),
+                    [no_patch],
                 )
                 - 1
             ).flatten()
             for no_patch in no_patches_per_axis_shift_1
         ]  # indices of relevant patches for step=patch_shift in vertical direction
 
-        _inds = [
-            (np.arange(1, no_patch + patch_shift, patch_shift) - 1).flatten()
-            for no_patch in no_patches_per_axis_shift_1
-        ]  # indices of relevant patches for step=patch_shift in vertical direction
-
-        for ind, _ind in zip(inds, _inds):
-            assert (ind == _ind).all()
+        ind_shapes = [_ind.shape[0] for _ind in inds]
 
         ninds = ninds_[np.ix_(*inds)].flatten()
+        _ninds = _ninds_[np.ix_(*inds)].reshape(-1, len(no_patches_per_axis_shift_1) + 1)
         assert len(ninds) == no_patches
         dinds = np.arange(no_pixels_in_patch).reshape(*patch_shapes)
 
@@ -546,7 +547,7 @@ class OverlappingNDPatches:
         no_pixels_to_synthesize = ind_to_synthesize[0].size  # no missing values
 
         # cut patches
-        print("Extracting patches...", end="")
+        print("Extracting patches...", end="", flush=True)
         patches_np = view_as_windows(
             image_np, window_shape=patch_shapes, step=1
         )  # moves sliding window left->right and then top->bottom
@@ -565,10 +566,10 @@ class OverlappingNDPatches:
             if self._torch
             else patches_np
         )
-        print("Done")
+        print("Done", flush=True)
 
         # compute indices required to merge patches back to image
-        print("Initialize back-transformation...", end="")
+        print("Initialize back-transformation...", end="", flush=True)
         all_inds_relevant_patches = [0] * no_pixels_to_synthesize
         all_inds_relevant_values_in_patch = [0] * no_pixels_to_synthesize
         restorable = (
@@ -580,41 +581,93 @@ class OverlappingNDPatches:
             loc_miss_values = [ind_to_synthesize[i][p] for i in range(len(patch_shapes))]
 
             # location of relevant patches for patch_shift = 1(rows and columns of ninds_)
-            loc_rel_patches = [
-                np.arange(
-                    max(loc_miss_value - shp + 2, 1),
-                    min(loc_miss_value + 1, no_shift) + 1,
-                )
-                - 1
+            # loc_rel_patches = [
+            #     np.arange(
+            #         max(loc_miss_value - shp + 2, 1),
+            #         min(loc_miss_value + 1, no_shift) + 1,
+            #     )
+            #     - 1
+            #     for loc_miss_value, shp, no_shift in zip(
+            #         loc_miss_values, patch_shapes, no_patches_per_axis_shift_1
+            #     )
+            # ]
+
+            # ns_ = ninds_[np.ix_(*loc_rel_patches)].flatten()
+
+            # loc_rel_patches_ = [
+            #     loc_miss_value - loc_rel_patch
+            #     for loc_miss_value, loc_rel_patch in zip(loc_miss_values, loc_rel_patches_old)
+            # ]
+
+            # ds_ = np.sort(dinds[np.ix_(*loc_rel_patches_)].flatten())[::-1]
+
+            loc_rel_patches = tuple(
+                slice(max(loc_miss_value - shp + 2, 1) - 1, min(loc_miss_value + 1, no_shift))
                 for loc_miss_value, shp, no_shift in zip(
                     loc_miss_values, patch_shapes, no_patches_per_axis_shift_1
                 )
-            ]
+            )
+            ns_ = ninds_[loc_rel_patches].flatten()
+            _ns_ = _ninds_[loc_rel_patches].reshape(-1, len(no_patches_per_axis_shift_1) + 1)
 
-            ns_ = ninds_[np.ix_(*loc_rel_patches)].flatten()
+            loc_rel_patches_ = tuple(
+                slice(
+                    loc_miss_value - min(loc_miss_value + 1, no_shift) + 1,
+                    loc_miss_value - (max(loc_miss_value - shp + 2, 1) - 1) + 1,
+                )
+                for loc_miss_value, shp, no_shift in zip(
+                    loc_miss_values, patch_shapes, no_patches_per_axis_shift_1
+                )
+            )
 
-            loc_rel_patches_ = [
-                loc_miss_value - loc_rel_patch
-                for loc_miss_value, loc_rel_patch in zip(loc_miss_values, loc_rel_patches)
-            ]
-
-            ds_ = np.sort(dinds[np.ix_(*loc_rel_patches_)].flatten())[::-1]
-
-            # ds_ = np.sort(dinds[r - r_, :][:, c - c_].flatten())[::-1]
+            ds_ = dinds[loc_rel_patches_].flatten()[::-1]
 
             # only use patches compatible with given patch_shift
             if patch_shift > 1:
-                nsinds = np.isin(ns_, ninds)
-                inds_relevant_patches, inds_relevant_values_in_patch = (
-                    ns_[nsinds],
-                    ds_[nsinds],
-                )
+                # ninds_[np.ix_(*inds)]
+                # nsinds = np.isin(ns_, ninds)
+
+                nsinds = np.ones(_ns_.shape[0], dtype=bool)
+                for i, no_patch in enumerate(no_patches_per_axis_shift_1):
+                    check = (_ns_[:, i] == np.repeat(no_patch - 1, _ns_.shape[0])) | (
+                        _ns_[:, i] % patch_shift == 0
+                    )
+                    nsinds &= check
+
+                _no_patches = _ns_[nsinds]
+                inds_relevant_patches = np.zeros(_no_patches.shape[0], dtype=int)
+                for i in range(len(no_patches_per_axis_shift_1)):
+                    inds_relevant_patches += (
+                        np.ceil(_no_patches[:, i] / patch_shift) * np.prod(ind_shapes[i + 1 :])
+                    ).astype(int)
+
+                # inds_relevant_patches, inds_relevant_values_in_patch = (
+                #     ns_[nsinds],
+                #     ds_[nsinds],
+                # )
+
+                inds_relevant_values_in_patch = ds_[nsinds]
+
             else:
                 inds_relevant_patches, inds_relevant_values_in_patch = ns_, ds_
 
             # indices considering remaining patches
-            if patch_shift > 1:
-                inds_relevant_patches = np.where(np.isin(ninds, inds_relevant_patches))[0]
+            # if patch_shift > 1:
+            #     # _inds_relevant_patches = np.array(
+            #     #     [
+            #     #         np.nonzero(ind_relevant_patches == ninds)[0]
+            #     #         for ind_relevant_patches in inds_relevant_patches
+            #     #     ]
+            #     # )
+            #     positions = np.where(
+            #         np.isin(
+            #             ninds,
+            #             ns_[nsinds],
+            #         )
+            #     )[0]
+
+            #     if (positions != inds_relevant_patches).any():
+            #         breakpoint()
 
             if image_not_incomplete:
                 all_inds_relevant_patches[p] = inds_relevant_patches
@@ -630,7 +683,7 @@ class OverlappingNDPatches:
                     all_inds_relevant_values_in_patch[p] = inds_relevant_values_in_patch[
                         ind_nonempty_patches
                     ]
-        print("Done")
+        print("Done", flush=True)
 
         self._image, self._patches = image, patches
         self.ind_to_synthesize = (
@@ -754,6 +807,7 @@ class OverlappingNDPatches:
                              merged, defaults to unweighted averaging.
         :return: Image obtained through patch averaging, is (height, width)
         """
+        print("Merge patches...", end="", flush=True)
         new_image = self._image.copy() if isinstance(self._image, ndarray) else self._image.clone()
         for p in range(self._no_pixels_to_synthesize):
             if self._restorable is not None and not self._restorable[p]:
@@ -789,6 +843,7 @@ class OverlappingNDPatches:
                 print("Merged estimate is \n  {}\n".format(estimate))
 
             new_image[loc_miss_values] = estimate
+        print("Done!", flush=True)
 
         return new_image
 
