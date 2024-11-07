@@ -227,7 +227,7 @@ long OverlappingPatches::back_transformation(
                 ++idx;
             }
         }
-        // Compute indices for relevant patches flattened for patch_shift = 1
+        // Compute indices for relevant patches flattened for patch_shift > 1
         all_inds_relevant_patches.head(new_end) =
             (((n_inds_per_axis.array().block(0, 0, new_end, no_dim) + patch_shift - 1) / patch_shift)
                  .rowwise() *
@@ -242,7 +242,6 @@ long OverlappingPatches::back_transformation(
     return end;
 }
 
-// Main function to process pixels and merge estimates
 void OverlappingPatches::merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image, std::string merge_method
                                // const vector<bool>& restorable,
                                // MergeMethod merge_method,
