@@ -12,3 +12,4 @@ __pycache__
 build/*
 tvutil.egg-info/*
 *.egg
+*.so

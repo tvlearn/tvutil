@@ -7,9 +7,10 @@ from .overlapping_patches import (
     weighted_mean_merger,
     gaussian2d,
     OverlappingPatches,
-    OverlappingNDPatches,
+    Overlapping3DPatches,
     MultiDimOverlappingPatches,
 )
+from .overlapping_nd_patches import OverlappingNDPatches
 from .whitening import apply_zca_whitening
 from .random_patches import extract_random_patches
 
@@ -22,6 +23,8 @@ __all__ = [
     "weighted_mean_merger",
     "gaussian2d",
     "OverlappingPatches",
+    "Overlapping3DPatches",
+    "OverlappingNDPatches",
     "MultiDimOverlappingPatches",
     "apply_zca_whitening",
     "extract_random_patches",

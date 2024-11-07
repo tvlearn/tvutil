@@ -1,2 +1,11 @@
 [tool.black]
 line-length = 100
+
+[build-system]
+requires = [
+    "setuptools>=42",
+    "pybind11>=2.10.0",
+    "toml",
+]
+build-type = "Release"
+build-backend = "setuptools.build_meta"
