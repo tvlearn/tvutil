@@ -129,6 +129,7 @@ class OverlappingNDPatches:
         vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
 
         vprint("Initialize back-transformation...", end="", flush=True, verbose=verbose)
+        start = time.monotonic()
         self._cpp = cppUtils.OverlappingPatches(
             self.no_pixels_to_synthesize,
             patch_shift,
