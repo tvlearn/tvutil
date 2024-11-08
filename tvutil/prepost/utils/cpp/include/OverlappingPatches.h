@@ -50,7 +50,7 @@ class OverlappingPatches {
 
     precision_t (*merger)(Ref<Vector<precision_t>>);
 
-    void merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image, std::string merge_method);
+    void merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image, bool no_empty_patches, bool image_complete, std::string merge_method);
 
 #ifdef CPPLIB_ENABLE_PYTHON_INTERFACE
     static void bind(py::module_ &m);
@@ -159,15 +159,14 @@ void OverlappingPatches::createRange(std::vector<long> &range, long start, long 
 // Helper function to generate Cartesian product from a vector of ranges
 template <class T>
 void OverlappingPatches::cartesianProduct(const std::vector<std::vector<T>> &lists, Ref<Matrix<T>> output,
-                                          long rows, long cols) {
+                                          long end, long no_dim) {
     long repeat = 1;
-    for (long j = cols - 1; j >= 0; --j) {
+    for (long j = no_dim - 1; j >= 0; --j) {
         const auto &list = lists[j];
-        long list_size = list.size();
-        for (long i = 0; i < rows; ++i) {
-            output(i, j) = list[(i / repeat) % list_size];
+        for (long i = 0; i < end; ++i) {
+            output(i, j) = list[(i / repeat) % list.size()];
         }
-        repeat *= list_size;
+        repeat *= list.size();
     }
 }
 
@@ -234,17 +233,16 @@ long OverlappingPatches::back_transformation(
              img_skips.array())
                 .rowwise()
                 .sum();
-        return new_end;
-    }
-    // Compute indices for relevant patches flattened for patch_shift = 1
-    all_inds_relevant_patches.head(end) =
+        end = new_end;
+    } else {
+        // Compute indices for relevant patches flattened for patch_shift = 1
+        all_inds_relevant_patches.head(end) =
         (n_inds_per_axis.block(0, 0, end, no_dim).array().rowwise() * img_skips.array()).rowwise().sum();
+    }
     return end;
 }
 
-void OverlappingPatches::merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image, std::string merge_method
-                               // const vector<bool>& restorable,
-                               // MergeMethod merge_method,
+void OverlappingPatches::merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image,  bool no_empty_patches, bool image_complete, std::string merge_method
                                // bool verbose,
 ) {
     set_merge_method(merge_method);
@@ -271,14 +269,11 @@ void OverlappingPatches::merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image, 
         Vector<long> all_inds_relevant_patches(max_pixels_to_restore);          // Relevant patches per pixel
         Vector<long> all_inds_relevant_values_in_patch(max_pixels_to_restore);  // Relevant values in patch
         long end;
+        long new_end;
+        long idx;
 
 #pragma omp for
         for (long p = 0; p < no_pixels_to_synthesize; ++p) {
-            // Check if pixel is restorable
-            // if (!restorable.empty() && !restorable[p]) {
-            //     continue;
-            // }
-
             end = back_transformation(p, all_inds_relevant_patches, all_inds_relevant_values_in_patch,
                                       n_inds_per_axis, d_inds_per_axis, n_inds_per_axis_to_keep,
                                       n_inds_to_keep, loc_rel_patches, loc_rel_values_in_patch, loc_to_keep);
@@ -288,21 +283,36 @@ void OverlappingPatches::merge(cRef<Matrix<>> patches, Ref<Vector<>> new_image, 
                 continue;
             }
 
-            for (long i = 0; i < end; ++i) {
-                restored(i) = patches(all_inds_relevant_patches(i), all_inds_relevant_values_in_patch(i));
+            if (no_empty_patches) {
+                for (long i = 0; i < end; ++i) {
+                    restored(i) = patches(all_inds_relevant_patches(i), all_inds_relevant_values_in_patch(i));
+                }
+            } else {
+                new_end = 0;
+                for (long i = 0; i < end; ++i) {
+                    if (patches.row(all_inds_relevant_patches(i)).array().isFinite().any()) {
+                        restored(new_end) = patches(all_inds_relevant_patches(i), all_inds_relevant_values_in_patch(i));
+                        new_end++;
+                    }
+                }
+                end = new_end;
+                if (end == 0) {
+                    all_pixels_reconstructed_thread = false;
+                    continue;
+                }
             }
-            estimate = merger(restored.head(end));
 
-            // Update the new image with the estimated value
-            long idx = 0;
-            for (long i = 0; i < ind_to_synthesize.rows(); ++i) {
-                idx += ind_to_synthesize(i, p) * img_skips_shift_1(i);
+            estimate = merger(restored.head(end));
+            
+            if (!image_complete){
+                idx = 0;
+                for (long i = 0; i < ind_to_synthesize.rows(); ++i) {
+                    idx += ind_to_synthesize(i, p) * img_skips_shift_1(i);
+                }
+            } else {
+                idx = p;
             }
-            if (idx != p) {
-                std::cout << "Warning: idx != p \n";
-                std::cout << "p = " << p << "\tidx = " << idx << "\n";
-            }
-            new_image(p) = estimate;
+            new_image(idx) = estimate;
         }
 #pragma omp atomic
         all_pixels_reconstructed &= all_pixels_reconstructed_thread;
@@ -324,6 +334,6 @@ void OverlappingPatches::bind(pybind11::module_ &m) {
                                   "no_patches_per_axis_shift_1"_a);
 
     OverlappingPatches_class_.def("merge", &OverlappingPatches::merge, "patches"_a.noconvert(),
-                                  "new_image"_a.noconvert(), "merge_method"_a.noconvert() = "mean");
+                                  "new_image"_a.noconvert(), "no_empty_patches"_a, "image_complete"_a, "merge_method"_a = "mean");
 }
 #endif

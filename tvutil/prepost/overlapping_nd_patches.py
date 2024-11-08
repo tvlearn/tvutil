@@ -20,17 +20,6 @@ import time
 import cppUtils
 
 
-def variance_merger(values):
-    # type: (Union[Tensor, ndarray]) -> Union[Tensor, ndarray]
-    """Merge data estimates by taking the variance.
-
-    :param values: see `mean_merger` docs
-    :return: variance of `values`, scalar
-    """
-    to_or_np = np if isinstance(values, ndarray) else to
-    return to_or_np.var(values)
-
-
 def weighted_mean_merger(values, height, width, inds_relevant):
     # type: (Union[Tensor, ndarray], int, int, Union[Tensor, ndarray]) -> Union[Tensor, ndarray]
     """Merge data estimates by taking a weighted mean.
@@ -124,83 +113,68 @@ class OverlappingNDPatches:
         self.device, self.precision = (
             None if isinstance(image, ndarray) else image.device
         ), image.dtype
-        image_np = image if isinstance(image, ndarray) else image.detach().cpu().numpy()
+        image = image if isinstance(image, ndarray) else image.detach().cpu().numpy()
+        self._image = image
 
         # Infer some parameters
         vprint("Infer Parameters...", end="", flush=True, verbose=verbose)
         start = time.monotonic()
-        params = self.get_parameters(image_np, patch_shapes, patch_shift)
+        self.get_parameters(image, patch_shapes, patch_shift)
         vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
 
         # cut patches
         vprint("Extracting patches...", end="", flush=True, verbose=verbose)
         start = time.monotonic()
-        patches, patches_np_not_isnan = self.extract_patches(
-            image, patch_shapes, patch_shift, **params
-        )
+        self.extract_patches(image, patch_shapes, patch_shift)
         vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
 
         vprint("Initialize back-transformation...", end="", flush=True, verbose=verbose)
         self._cpp = cppUtils.OverlappingPatches(
-            params["no_pixels_to_synthesize"],
+            self.no_pixels_to_synthesize,
             patch_shift,
-            params["ind_to_synthesize"],
+            self.ind_to_synthesize,
             np.array(image.shape),
             np.array(patch_shapes),
-            np.array(params["no_patches_per_axis"]),
-            np.array(params["no_patches_per_axis_shift_1"]),
+            self.no_patches_per_axis,
+            self.no_patches_per_axis_shift_1,
         )
         vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
 
-        self._image, self._patches = image, patches
-
     def get_parameters(self, image, patch_shapes, patch_shift):
-
         # infer some parameters
-        image_not_incomplete = np.logical_not(np.isnan(image).any())
+        self.image_complete = np.isfinite(image).all()
 
-        no_pixels_in_patch = np.prod(patch_shapes)
+        self.no_pixels_in_patch = np.prod(patch_shapes)
 
-        no_patches_per_axis = [
+        self.no_patches_per_axis = [
             int(np.ceil(float(image_shp - patch_shp) / patch_shift) + 1)
             for image_shp, patch_shp in zip(image.shape, patch_shapes)
         ]
-        no_patches = np.prod(no_patches_per_axis)
+        self.no_patches = np.prod(self.no_patches_per_axis)
 
-        no_patches_per_axis_shift_1 = [
-            int(np.ceil(float(image_shp - patch_shp)) + 1)
-            for image_shp, patch_shp in zip(image.shape, patch_shapes)
-        ]
-        no_patches_shift_1 = np.prod(no_patches_per_axis_shift_1)  # no patches for step=1
-
+        self.no_patches_per_axis_shift_1 = np.array(
+            [
+                int(np.ceil(float(image_shp - patch_shp)) + 1)
+                for image_shp, patch_shp in zip(image.shape, patch_shapes)
+            ]
+        )
         to_be_synthesized = (
             np.isnan(image) if np.isnan(image).any() else np.ones_like(image, dtype=bool)
         )  # indicates which pixels of the input image are to be reconstructed
-        ind_to_synthesize = np.array(np.nonzero(to_be_synthesized))
-        no_pixels_to_synthesize = ind_to_synthesize[0].size  # no missing values
-        return dict(
-            image_not_incomplete=image_not_incomplete,
-            no_pixels_in_patch=no_pixels_in_patch,
-            no_patches_per_axis=no_patches_per_axis,
-            no_patches=no_patches,
-            no_patches_per_axis_shift_1=no_patches_per_axis_shift_1,
-            no_patches_shift_1=no_patches_shift_1,
-            to_be_synthesized=to_be_synthesized,
-            ind_to_synthesize=ind_to_synthesize,
-            no_pixels_to_synthesize=no_pixels_to_synthesize,
-        )
+        self.ind_to_synthesize = np.array(np.nonzero(to_be_synthesized))
+        self.no_pixels_to_synthesize = self.ind_to_synthesize[0].size  # no missing values
 
     def extract_patches(
         self,
         image,
         patch_shapes,
         patch_shift,
-        no_patches,
-        no_pixels_in_patch,
-        no_patches_per_axis_shift_1,
-        **kwargs,
     ):
-        patches_np = view_as_windows(
+        no_patches = self.no_patches
+        no_pixels_in_patch = self.no_pixels_in_patch
+        no_patches_per_axis_shift_1 = self.no_patches_per_axis_shift_1
+
+        patches = view_as_windows(
             image, window_shape=patch_shapes, step=1
         )  # moves sliding window left->right and then top->bottom
         # is (image_height-patch_height+1, image_width-patch_width+1, patch_height, patch_width)
@@ -215,11 +189,13 @@ class OverlappingNDPatches:
                 ).flatten()
                 for no_patch in no_patches_per_axis_shift_1
             ]  # indices of relevant patches for step=patch_shift in vertical direction
-            patches_np = patches_np[np.ix_(*inds)]  # TODO: Find better way to do this?
+            patches = patches[np.ix_(*inds)]  # TODO: Find better way to do this?
 
-        patches_np = patches_np.reshape(no_patches, no_pixels_in_patch)
-        patches_np_not_isnan = np.logical_not(np.isnan(patches_np))
-        return np.ascontiguousarray(patches_np), patches_np_not_isnan
+        patches = patches.reshape(no_patches, no_pixels_in_patch)
+
+        self.inds_not_empty = np.isfinite(patches).any(axis=1)
+        self.no_empty_patches = self.inds_not_empty.all()
+        self._patches = np.ascontiguousarray(patches)
 
     def get_image_shape(self):
         # type: () -> Tuple[int, int]
@@ -236,13 +212,7 @@ class OverlappingNDPatches:
         :param discard_empty: Whether to discard patches that do not contain finite entries
         :return: Number of patches
         """
-        to_or_np = to if self._torch else np
-        not_isnan = to_or_np.logical_not(to_or_np.isnan(self._patches))  # type: ignore
-        no_patches_with_discarding = to_or_np.sum(
-            not_isnan.any(**{"dim" if self._torch else "axis": 1})
-        ).item()
-        no_patches_without_discarding = int(self._patches.shape[0])
-        return no_patches_with_discarding if discard_empty else no_patches_without_discarding
+        return self.inds_not_empty.sum() if discard_empty else self._patches.shape[0]
 
     def get_patch_shape_shift(self):
         # type: () -> Tuple[int, int, int]
@@ -252,54 +222,44 @@ class OverlappingNDPatches:
         """
         return *self._patch_shapes, self._patch_shift
 
-    def get(self, discard_empty=True):
+    def get(self, discard_empty=True, copy=True):
         # type: (bool) -> Union[Tensor, ndarray]
         """Returns patches cut from image.
 
         :param discard_empty: Whether to discard patches that do not contain finite entries
         :return: Image patches tensor, is (no_pixels_per_patch, no_patches)
         """
-        to_or_np = to if self._torch else np
+        self._copy = copy
         patches = to.from_numpy(self._patches) if self._torch else self._patches
-        if to_or_np.logical_not(to_or_np.isnan(self._patches).any()):
-            return patches
+        copy_func = to.clone if self._torch else np.copy
+        if self.no_empty_patches or not discard_empty:
+            return copy_func(patches) if copy else patches
         else:
-            if discard_empty:
-                not_isnan = to_or_np.logical_not(to_or_np.isnan(self._patches))  # type: ignore
-                inds_not_empty = not_isnan.any(**{"dim" if self._torch else "axis": 0})
-                return patches[:, inds_not_empty]
-            else:
-                return patches
+            if not copy:
+                print("WARNING: 'discard_empty = True' returns always a copy! ")
+            return patches[self.inds_not_empty, :]  # TODO: Avoid a copy here
 
-    def set(self, new_patches, discarded_empty=True):
+    def set(self, new_patches, discard_empty=True):
         # type: (Union[Tensor, ndarray], bool) -> None
         """Update image patches tensor to new values
 
         :param new_patches: Image patches tensor filled with new values. `self._patches` will
                             be updated to this tensor, must be (no_pixels_per_patch, no_patches).
-        :param discarded_empty: Whether patches without finite entries have been discarded when
+        :param discard_empty: Whether patches without finite entries have been discarded when
                                 `get` was called (compare docs of `get`).
         """
-        to_or_np = to if self._torch else np
         new_patches = new_patches.numpy() if self._torch else new_patches
-        if to_or_np.logical_not(to_or_np.isnan(self._patches).any()):
+        if self.no_empty_patches or not discard_empty:
             assert (
                 new_patches.shape == self._patches.shape
             ), "shape of new and internal patches does not match"
             self._patches[:, :] = new_patches
         else:
-            if discarded_empty:
-                not_isnan = to_or_np.logical_not(to_or_np.isnan(self._patches))  # type: ignore
-                inds_not_empty = not_isnan.any(**{"dim" if self._torch else "axis": 0})
-                assert (
-                    new_patches.shape == self._patches[:, inds_not_empty].shape
-                ), "shape of new and non-empty internal patches does not match"
-                self._patches[:, inds_not_empty] = new_patches
-            else:
-                assert (
-                    new_patches.shape == self._patches.shape
-                ), "shape of new and internal patches does not match"
-                self._patches[:, :] = new_patches
+            assert new_patches.shape == (
+                self.inds_not_empty.sum(),
+                self._patches.shape[1],
+            ), "shape of new and non-empty internal patches does not match"
+            self._patches[self.inds_not_empty, :] = new_patches
 
     def merge(self, merge_method: str = "mean"):
         # type: (Callable) -> Union[Tensor, ndarray]
@@ -314,7 +274,13 @@ class OverlappingNDPatches:
         new_image = self._image.copy() if isinstance(self._image, ndarray) else self._image.clone()
 
         start = time.monotonic()
-        self._cpp.merge(self._patches, new_image.reshape(-1), merge_method)
+        self._cpp.merge(
+            self._patches,
+            new_image.reshape(-1),
+            self.no_empty_patches,
+            self.image_complete,
+            merge_method,
+        )
         vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=self._verbose)
 
         return new_image
