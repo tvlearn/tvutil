@@ -34,8 +34,8 @@ class OverlappingPatches {
 
     void set_merge_method(std::string);
 
-    void createRange(std::vector<long> &, std::vector<bool> &, long, long, long, long);
-    void createRange(std::vector<long> &, long, long);
+    void arange(std::vector<long> &, std::vector<bool> &, long, long, long, long);
+    void arange(std::vector<long> &, long, long);
 
     template <class T>
     void cartesianProduct(const std::vector<std::vector<T>> &lists, Ref<Matrix<T>> output, long rows,
@@ -133,7 +133,7 @@ void OverlappingPatches::set_merge_method(std::string merge_method) {
 }
 
 // Helper function to generate a range with specified boundaries
-void OverlappingPatches::createRange(std::vector<long> &range, std::vector<bool> &check, long start, long end,
+void OverlappingPatches::arange(std::vector<long> &range, std::vector<bool> &check, long start, long end,
                                      long last_patch, long patch_shift) {
     range.clear();
     check.clear();
@@ -148,7 +148,7 @@ void OverlappingPatches::createRange(std::vector<long> &range, std::vector<bool>
     return;
 }
 
-void OverlappingPatches::createRange(std::vector<long> &range, long start, long end) {
+void OverlappingPatches::arange(std::vector<long> &range, long start, long end) {
     range.clear();
     for (long i = start; i < end; ++i) {
         range.push_back(i);
@@ -179,6 +179,8 @@ long OverlappingPatches::back_transformation(
     long loc_miss_value;
     long shp;
     long no_shift;
+    long first;
+    long last;
     long end = 1;
 
     // Compute indices of relevant patches and relevant values per patch for each axis
@@ -187,16 +189,19 @@ long OverlappingPatches::back_transformation(
         shp = patch_shapes[i];
         no_shift = no_patches_per_axis_shift_1[i];
 
+        first =  std::max(loc_miss_value - shp + 2, (long)1) - 1;
+        last = std::min(loc_miss_value + 1, no_shift);
+
         if (patch_shift > 1) {
-            createRange(loc_rel_patches[i], loc_to_keep[i], std::max(loc_miss_value - shp + 2, (long)1) - 1,
-                        std::min(loc_miss_value + 1, no_shift), no_shift, patch_shift);
+            arange(loc_rel_patches[i], loc_to_keep[i], first, last, no_shift, patch_shift);
         } else {
-            createRange(loc_rel_patches[i], std::max(loc_miss_value - shp + 2, (long)1) - 1,
-                        std::min(loc_miss_value + 1, no_shift));
+            arange(loc_rel_patches[i], first, last);
         }
 
-        createRange(loc_rel_values_in_patch[i], loc_miss_value - std::min(loc_miss_value + 1, no_shift) + 1,
-                    loc_miss_value - (std::max(loc_miss_value - shp + 2, (long)1) - 1) + 1);
+        first =  loc_miss_value - std::min(loc_miss_value + 1, no_shift) + 1;
+        last = loc_miss_value - (std::max(loc_miss_value - shp + 2, (long)1) - 1) + 1;
+
+        arange(loc_rel_values_in_patch[i], first , last);
         end *= (long)loc_rel_patches[i].size();
     }
 
