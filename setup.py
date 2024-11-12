@@ -32,28 +32,29 @@ extra_compile_args = sysconfig.get_config_var("CFLAGS").split()
 extra_compile_args += [
     "-Wall",
     "-Wextra",
-    "-Wshadow",
     "-pedantic",
     "-Wno-unknown-pragmas",
     "-march=native",
 ]
 extra_compile_args += BUILD_TYPES.get(build_type, [])
 
-define_macros = [("TVUTIL_PRECISION", "double"), ("EIGEN_DONT_PARALLELIZE", None)]
+define_macros = [("EIGEN_DONT_PARALLELIZE", None)]
 
 ext_modules = [
     Pybind11Extension(
-        "cppUtils",
+        f"cppUtils_{dtype}",
         [
             "tvutil/prepost/utils/cpp/src/Bindings.cpp",
         ],
         include_dirs=include_dirs,
         extra_compile_args=extra_compile_args + ["-fopenmp"],
         extra_link_args=["-lgomp"],
-        define_macros=define_macros,
+        define_macros=define_macros
+        + [("TVUTIL_PRECISION", dtype), ("MODULE_NAME", f"cppUtils_{dtype}")],
         language="c++",
         cxx_std=17,
-    ),
+    )
+    for dtype in ("float", "double")
 ]
 
 with ParallelCompile(default=0):

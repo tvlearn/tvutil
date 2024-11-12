@@ -16,7 +16,7 @@ try:
 except ImportError:
     _device = None
 
-from tvutil.prepost import OverlappingPatches, MultiDimOverlappingPatches
+from tvutil.prepost import OverlappingPatches, MultiDimOverlappingPatches, OverlappingNDPatches
 
 
 @pytest.fixture(scope="function", params=[pytest.param(_device, marks=pytest.mark.gpu)])
@@ -66,6 +66,7 @@ def test_get_number_of_patches(setup):
     patch_shift = 1
     ndims = 4
     OLP = OverlappingPatches(setup.image, setup.patch_height, setup.patch_width, patch_shift)
+    OLP_ND = OverlappingNDPatches(setup.image, [setup.patch_height, setup.patch_width], patch_shift)
     MultiDimOLP = MultiDimOverlappingPatches(
         setup.repeat_fn(setup.image, (1, 1, ndims)),
         setup.patch_height,
@@ -76,6 +77,7 @@ def test_get_number_of_patches(setup):
         setup.image.shape[1] - setup.patch_width + 1
     )
     assert OLP.get_number_of_patches() == no_patches_1dim
+    assert OLP_ND.get_number_of_patches() == no_patches_1dim
     assert MultiDimOLP.get_number_of_patches() == no_patches_1dim
 
 
@@ -83,6 +85,7 @@ def test_get_patch_height_width_shift(setup):
     patch_shift = 1
     ndims = 4
     OLP = OverlappingPatches(setup.image, setup.patch_height, setup.patch_width, patch_shift)
+    OLP_ND = OverlappingNDPatches(setup.image, [setup.patch_height, setup.patch_width], patch_shift)
     MultiDimOLP = MultiDimOverlappingPatches(
         setup.repeat_fn(setup.image, (1, 1, ndims)),
         setup.patch_height,
@@ -90,6 +93,11 @@ def test_get_patch_height_width_shift(setup):
         patch_shift,
     )
     assert OLP.get_patch_height_width_shift() == (
+        setup.patch_height,
+        setup.patch_width,
+        patch_shift,
+    )
+    assert OLP_ND.get_patch_shape_shift() == (
         setup.patch_height,
         setup.patch_width,
         patch_shift,
@@ -103,8 +111,14 @@ def test_get_patch_height_width_shift(setup):
 
 def test_get(setup):
     OLP = OverlappingPatches(setup.image, setup.patch_height, setup.patch_width, setup.patch_shift)
+    OLP_ND = OverlappingNDPatches(
+        setup.image, [setup.patch_height, setup.patch_width], setup.patch_shift
+    )
     OLP_incomplete = OverlappingPatches(
         setup.image_incomplete, setup.patch_height, setup.patch_width, setup.patch_shift
+    )
+    OLP_ND_incomplete = OverlappingNDPatches(
+        setup.image_incomplete, [setup.patch_height, setup.patch_width], setup.patch_shift
     )
     image_shape, patch_height, patch_width = (
         setup.image.shape,
@@ -112,16 +126,25 @@ def test_get(setup):
         setup.patch_width,
     )
     patches, patches_incomplete = OLP.get(), OLP_incomplete.get()
+    patches_ND, patches_ND_incomplete = OLP_ND.get(), OLP_ND_incomplete.get()
 
     assert isinstance(patches, setup.tensor_type)
     assert setup.logical_not_fn(setup.isnan_fn(patches).any())
     assert isinstance(patches_incomplete, setup.tensor_type)
     assert setup.isnan_fn(patches_incomplete).any()
 
+    assert isinstance(patches_ND, setup.tensor_type)
+    assert setup.logical_not_fn(setup.isnan_fn(patches_ND).any())
+    assert isinstance(patches_ND_incomplete, setup.tensor_type)
+    assert setup.isnan_fn(patches_ND_incomplete).any()
+
     no_patches = (image_shape[0] - patch_height + 1) * (image_shape[1] - patch_width + 1)
     no_pixels = patch_height * patch_width
     assert patches.shape == (no_pixels, no_patches)
     assert patches_incomplete.shape == (no_pixels, no_patches)
+
+    assert patches_ND.shape == (no_patches, no_pixels)
+    assert patches_ND_incomplete.shape == (no_patches, no_pixels)
 
     if setup.prints_enabled:
         print(setup.image)
@@ -129,77 +152,102 @@ def test_get(setup):
 
 
 def test_set(setup):
-    OLP = OverlappingPatches(setup.image, setup.patch_height, setup.patch_width, setup.patch_shift)
-    OLP_incomplete = OverlappingPatches(
+
+    OLP_2D_incomplete = OverlappingPatches(
         setup.image_incomplete,
         setup.patch_height,
         setup.patch_width,
         setup.patch_shift,
     )
-    copy_fn = np.copy if setup.using_np else to.clone
-    patches, patches_incomplete = copy_fn(OLP.get()), copy_fn(OLP_incomplete.get())
-
-    no_pixels = patches.size if setup.using_np else patches.numel()
-    new_patches = setup.arange_fn(no_pixels, dtype=patches.dtype).reshape(patches.shape)
-    new_patches_incomplete = copy_fn(patches_incomplete)
-    new_patches_incomplete[setup.isnan_fn(patches_incomplete)] = 0.0
-    OLP.set(new_patches)
-    OLP_incomplete.set(new_patches_incomplete)
-    allclose_fn = np.allclose if setup.using_np else to.allclose
-    assert not allclose_fn(patches, OLP.get())
-    assert allclose_fn(new_patches, OLP.get())
-    assert not allclose_fn(
-        patches[setup.isnan_fn(patches_incomplete)],
-        OLP_incomplete.get()[setup.isnan_fn(patches_incomplete)],
+    OLP_2D = OverlappingPatches(
+        setup.image, setup.patch_height, setup.patch_width, setup.patch_shift
     )
-    assert allclose_fn(new_patches_incomplete, OLP_incomplete.get())
+    OLP_ND_incomplete = OverlappingNDPatches(
+        setup.image_incomplete,
+        [setup.patch_height, setup.patch_width],
+        setup.patch_shift,
+    )
+    OLP_ND = OverlappingNDPatches(
+        setup.image, [setup.patch_height, setup.patch_width], setup.patch_shift
+    )
 
-    if setup.prints_enabled:
-        print(OLP.get())
-        print(OLP_incomplete.get())
+    for OLP, OLP_incomplete in ((OLP_2D, OLP_2D_incomplete), (OLP_ND, OLP_ND_incomplete)):
+        copy_fn = np.copy if setup.using_np else to.clone
+        patches, patches_incomplete = copy_fn(OLP.get()), copy_fn(OLP_incomplete.get())
+
+        no_pixels = patches.size if setup.using_np else patches.numel()
+        new_patches = setup.arange_fn(no_pixels, dtype=patches.dtype).reshape(patches.shape)
+        new_patches_incomplete = copy_fn(patches_incomplete)
+        new_patches_incomplete[setup.isnan_fn(patches_incomplete)] = 0.0
+        OLP.set(new_patches)
+        OLP_incomplete.set(new_patches_incomplete)
+        allclose_fn = np.allclose if setup.using_np else to.allclose
+        assert not allclose_fn(patches, OLP.get())
+        assert allclose_fn(new_patches, OLP.get())
+        assert not allclose_fn(
+            patches[setup.isnan_fn(patches_incomplete)],
+            OLP_incomplete.get()[setup.isnan_fn(patches_incomplete)],
+        )
+        assert allclose_fn(new_patches_incomplete, OLP_incomplete.get())
+
+        if setup.prints_enabled:
+            print(OLP.get())
+            print(OLP_incomplete.get())
 
 
 def test_merge(setup):
     image, image_incomplete = setup.image, setup.image_incomplete
-    OLP = OverlappingPatches(setup.image, setup.patch_height, setup.patch_width, setup.patch_shift)
-    OLP_incomplete = OverlappingPatches(
+    OLP_2D_incomplete = OverlappingPatches(
         setup.image_incomplete,
         setup.patch_height,
         setup.patch_width,
         setup.patch_shift,
     )
-    copy_fn = np.copy if setup.using_np else to.clone
-    patches, patches_incomplete = copy_fn(OLP.get()), copy_fn(OLP_incomplete.get())
-
-    _image = OLP.merge()
-    allclose_fn = np.allclose if setup.using_np else to.allclose
-    assert allclose_fn(image, _image)
-
-    no_pixels = patches.size if setup.using_np else patches.numel()
-    new_patches = setup.arange_fn(no_pixels, dtype=patches.dtype).reshape(patches.shape)
-    new_patches_incomplete = copy_fn(patches_incomplete)
-    new_patches_incomplete[setup.isnan_fn(patches_incomplete)] = 0.0
-    new_image = OLP.set_and_merge(new_patches)
-    new_image_incomplete = OLP_incomplete.set_and_merge(new_patches_incomplete)
-
-    assert not allclose_fn(image, new_image)
-    assert allclose_fn(
-        image[setup.logical_not_fn(setup.isnan_fn(image_incomplete))],
-        new_image_incomplete[setup.logical_not_fn(setup.isnan_fn(image_incomplete))],
+    OLP_2D = OverlappingPatches(
+        setup.image, setup.patch_height, setup.patch_width, setup.patch_shift
     )
-    assert not allclose_fn(
-        image[setup.isnan_fn(image_incomplete)],
-        new_image_incomplete[setup.isnan_fn(image_incomplete)],
+    OLP_ND_incomplete = OverlappingNDPatches(
+        setup.image_incomplete,
+        [setup.patch_height, setup.patch_width],
+        setup.patch_shift,
+    )
+    OLP_ND = OverlappingNDPatches(
+        setup.image, [setup.patch_height, setup.patch_width], setup.patch_shift
     )
 
-    if setup.prints_enabled:
-        print(image)
-        print(new_patches)
-        print(new_image)
-        print()
-        print(image)
-        print(new_patches_incomplete)
-        print(new_image_incomplete)
+    for OLP, OLP_incomplete in ((OLP_2D, OLP_2D_incomplete), (OLP_ND, OLP_ND_incomplete)):
+        copy_fn = np.copy if setup.using_np else to.clone
+        patches, patches_incomplete = copy_fn(OLP.get()), copy_fn(OLP_incomplete.get())
+
+        _image = OLP.merge()
+        allclose_fn = np.allclose if setup.using_np else to.allclose
+        assert allclose_fn(image, _image)
+
+        no_pixels = patches.size if setup.using_np else patches.numel()
+        new_patches = setup.arange_fn(no_pixels, dtype=patches.dtype).reshape(patches.shape)
+        new_patches_incomplete = copy_fn(patches_incomplete)
+        new_patches_incomplete[setup.isnan_fn(patches_incomplete)] = 0.0
+        new_image = OLP.set_and_merge(new_patches)
+        new_image_incomplete = OLP_incomplete.set_and_merge(new_patches_incomplete)
+
+        assert not allclose_fn(image, new_image)
+        assert allclose_fn(
+            image[setup.logical_not_fn(setup.isnan_fn(image_incomplete))],
+            new_image_incomplete[setup.logical_not_fn(setup.isnan_fn(image_incomplete))],
+        )
+        assert not allclose_fn(
+            image[setup.isnan_fn(image_incomplete)],
+            new_image_incomplete[setup.isnan_fn(image_incomplete)],
+        )
+
+        if setup.prints_enabled:
+            print(image)
+            print(new_patches)
+            print(new_image)
+            print()
+            print(image)
+            print(new_patches_incomplete)
+            print(new_image_incomplete)
 
 
 def test_get_ndim_with_concatenation(setup):

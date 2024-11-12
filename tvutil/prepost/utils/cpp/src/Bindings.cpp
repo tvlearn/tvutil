@@ -13,8 +13,7 @@
 
 #include "OverlappingPatches.h"
 
-PYBIND11_MODULE(cppUtils, m) {
+PYBIND11_MODULE(MODULE_NAME, m) {
     /* See https://numpy.org/devdocs/user/basics.types.html */
-    // merge::bind(m);
     OverlappingPatches ::bind(m);
 }

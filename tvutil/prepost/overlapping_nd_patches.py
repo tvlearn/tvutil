@@ -17,7 +17,10 @@ except ImportError:
     pass
 import time
 
-import cppUtils
+import cppUtils_float
+import cppUtils_double
+
+cppUtils = {"float32": cppUtils_float, "float64": cppUtils_double}
 
 
 def weighted_mean_merger(values, height, width, inds_relevant):
@@ -80,22 +83,30 @@ class OverlappingNDPatches:
     def __init__(
         self,
         image,
-        patch_shapes,
-        patch_shift,
-        verbose=False,
+        patch_shapes: list,
+        patch_shift: int = 1,
+        color: bool = False,
+        dtype: np.dtype = None,
+        verbose: bool = False,
     ):
-        # type: (Union[Tensor, ndarray], int, int, int, bool) -> None
-        """Back and forth transformation for image segmentation into overlapping patches.
-        Makes use of `skimage.util.view_as_windows`.
+        """Performs bidirectional transformations to segment an image into overlapping patches and reconstruct it.
+        Uses `skimage.util.view_as_windows` to create patches with specified shapes and shifts.
 
-        :param image: Tensor to be cut into patches and reconstructed.
-        :param patch_shapes: Will be passed as `window_shape` to `skimage.util.view_as_windows`.
-        :param patch_shift: Will be passed as `step` to `skimage.util.view_as_windows`.
-        :param verbose: Whether to print details when merging patches
+        :param image: Tensor representing the image to be segmented into patches and reconstructed.
+        :param patch_shapes: Tuple specifying the shape of each patch; passed as `window_shape` to `skimage.util.view_as_windows`.
+        :param patch_shift: Integer specifying the step size between patches; passed as `step` to `skimage.util.view_as_windows`.
+        :param color: Boolean indicating whether the input image is colored.
+        :param dtype: Desired data type for the patches and the reconstructed image. If 'dtype=None', the data type of `image` is used.
+        :param verbose: Boolean indicating whether to print details during the patch merging process.
         """
+        patch_shapes += [3] if color else []
         assert len(patch_shapes) == len(
             image.shape
         ), "length of patch shapes must match length of image shape"
+        if color:
+            assert (
+                image.shape[-1] == patch_shapes[-1]
+            ), "The third dimension must represent the color channels (e.g., RGB)."
         patch_shift_greater_than_patch_shapes = patch_shift > np.array(patch_shapes)
         if (patch_shift_greater_than_patch_shapes).any():
             positions = np.nonzero(patch_shift_greater_than_patch_shapes)[0]
@@ -107,14 +118,17 @@ class OverlappingNDPatches:
             vprint("Some image pixels will not be reconstructed!", flush=True, verbose=verbose)
 
         self._torch = False if isinstance(image, ndarray) else True
+        image = image if isinstance(image, ndarray) else image.detach().cpu().numpy()
+        dtype = np.dtype(image.dtype if dtype is None else dtype)
+        image = image.astype(dtype)
+        self._image = image
+
         self._verbose = verbose
         self._patch_shapes = patch_shapes
         self._patch_shift = patch_shift
         self.device, self.precision = (
             None if isinstance(image, ndarray) else image.device
         ), image.dtype
-        image = image if isinstance(image, ndarray) else image.detach().cpu().numpy()
-        self._image = image
 
         # Infer some parameters
         vprint("Infer Parameters...", end="", flush=True, verbose=verbose)
@@ -130,7 +144,7 @@ class OverlappingNDPatches:
 
         vprint("Initialize back-transformation...", end="", flush=True, verbose=verbose)
         start = time.monotonic()
-        self._cpp = cppUtils.OverlappingPatches(
+        self._cpp = cppUtils[dtype.name].OverlappingPatches(
             self.no_pixels_to_synthesize,
             patch_shift,
             self.ind_to_synthesize,
@@ -284,7 +298,7 @@ class OverlappingNDPatches:
         )
         vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=self._verbose)
 
-        return new_image
+        return to.from_numpy(new_image) if self._torch else new_image
 
     def set_and_merge(
         self,
