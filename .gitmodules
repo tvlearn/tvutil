@@ -1,3 +1,0 @@
-[submodule "tvutil/prepost/utils/extern/eigen"]
-	path = tvutil/prepost/utils/extern/eigen
-	url = git@gitlab.com:libeigen/eigen.git
