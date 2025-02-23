@@ -122,6 +122,7 @@ class OverlappingNDPatches:
         dtype = np.dtype(image.dtype if dtype is None else dtype)
         image = image.astype(dtype)
         self._image = image
+        self._time = {}
 
         self._verbose = verbose
         self._patch_shapes = patch_shapes
@@ -134,13 +135,17 @@ class OverlappingNDPatches:
         vprint("Infer Parameters...", end="", flush=True, verbose=verbose)
         start = time.monotonic()
         self.get_parameters(image, patch_shapes, patch_shift)
-        vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
+        t = time.monotonic() - start
+        vprint(f"Done in {t:.2f} s", flush=True, verbose=verbose)
+        self._time["time_parameters"] = t
 
         # cut patches
         vprint("Extracting patches...", end="", flush=True, verbose=verbose)
         start = time.monotonic()
         self.extract_patches(image, patch_shapes, patch_shift)
-        vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
+        t = time.monotonic() - start
+        vprint(f"Done in {t:.2f} s", flush=True, verbose=verbose)
+        self._time["time_extract_patches"] = t
 
         vprint("Initialize back-transformation...", end="", flush=True, verbose=verbose)
         start = time.monotonic()
@@ -153,7 +158,9 @@ class OverlappingNDPatches:
             self.no_patches_per_axis,
             self.no_patches_per_axis_shift_1,
         )
-        vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=verbose)
+        t = time.monotonic() - start
+        vprint(f"Done in {t:.2f} s", flush=True, verbose=verbose)
+        self._time["time_init_backtrafo"] = t
 
     def get_parameters(self, image, patch_shapes, patch_shift):
         # infer some parameters
@@ -296,7 +303,9 @@ class OverlappingNDPatches:
             self.image_complete,
             merge_method,
         )
-        vprint(f"Done in {time.monotonic() - start:.2f} s", flush=True, verbose=self._verbose)
+        t = time.monotonic() - start
+        vprint(f"Done in {t:.2f} s", flush=True, verbose=self._verbose)
+        self._time["time_merge"] = t
 
         return to.from_numpy(new_image) if self._torch else new_image
 
